@@ -12,21 +12,11 @@ import { Upload, X, Download, RotateCcw, AlertTriangle, Eye, EyeOff, Brain } fro
 import Image from "next/image"
 import { config } from "@/lib/config"
 import { ConnectionTest } from "@/components/connection-test"
-import { apiService, MLResult } from "@/lib/api-service"
+import { apiService, PredictionResult } from "@/lib/api-service"
 
 interface AnalysisResult {
-  label: "pneumonia" | "normal" | "other"
-  probabilities: {
-    pneumonia: number
-    normal: number
-    other: number
-  }
-  overlays?: {
-    heatmapUrl?: string
-    boxes?: Array<{ x: number; y: number; w: number; h: number; score: number; label: string }>
-  }
+  text: string
   modelVersion: string
-  runtimeMs: number
   caseId: string
 }
 
@@ -36,102 +26,8 @@ export default function DetectPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [showOverlay, setShowOverlay] = useState(true)
-  const [overlayOpacity, setOverlayOpacity] = useState([80])
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
-  const [userId] = useState(config.defaultUserId)
-  
-  // Refs for cleanup
-  const eventSourceRef = useRef<EventSource | null>(null)
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const [modelVersion, setModelVersion] = useState<string>(config.defaultModelVersion)
 
-  // Cleanup function for SSE and polling
-  const cleanupListeners = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
-    }
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current)
-      pollingIntervalRef.current = null
-    }
-  }, [])
-
-  // Option B: Polling for results
-  const setupPolling = useCallback(() => {
-    cleanupListeners()
-    
-    if (!uploadedFileName) return
-    
-    const pollForResult = async () => {
-      try {
-        const payload = await apiService.getMLResult(userId, uploadedFileName)
-        
-        if (payload.filename === uploadedFileName && payload.userId === userId) {
-          const analysisResult: AnalysisResult = {
-            label: payload.result.prediction as "pneumonia" | "normal" | "other",
-            probabilities: payload.result.probabilities,
-            modelVersion: "PneumoNet-v2.1",
-            runtimeMs: 0,
-            caseId: `case_${Date.now()}`,
-          }
-          
-          setResult(analysisResult)
-          setIsAnalyzing(false)
-          cleanupListeners() // Stop polling once we get the result
-          console.log("Received ML result via polling:", payload)
-        }
-      } catch (error) {
-        console.error("Polling error:", error)
-      }
-    }
-    
-    // Poll immediately, then every configured interval
-    pollForResult()
-    pollingIntervalRef.current = setInterval(pollForResult, config.polling.interval)
-  }, [uploadedFileName, userId, cleanupListeners])
-
-  // Option A: SSE (Server-Sent Events) for live updates
-  const setupSSE = useCallback(() => {
-    cleanupListeners()
-    
-    try {
-      const es = apiService.setupSSEConnection(
-        (payload: MLResult) => {
-          // Check if this result is for our uploaded file
-          if (payload.filename === uploadedFileName && payload.userId === userId) {
-            const analysisResult: AnalysisResult = {
-              label: payload.result.prediction as "pneumonia" | "normal" | "other",
-              probabilities: payload.result.probabilities,
-              modelVersion: "PneumoNet-v2.1", // You can get this from the payload if available
-              runtimeMs: 0, // You can get this from the payload if available
-              caseId: `case_${Date.now()}`,
-            }
-            
-            setResult(analysisResult)
-            setIsAnalyzing(false)
-            console.log("Received ML result via SSE:", payload)
-          }
-        },
-        (error) => {
-          console.error("SSE error:", error)
-          // Fallback to polling if SSE fails
-          setupPolling()
-        }
-      )
-      eventSourceRef.current = es
-    } catch (error) {
-      console.error("Failed to setup SSE, falling back to polling:", error)
-      setupPolling()
-    }
-  }, [uploadedFileName, userId, cleanupListeners, setupPolling])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanupListeners()
-    }
-  }, [cleanupListeners])
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
@@ -140,7 +36,6 @@ export default function DetectPage() {
       setPreviewUrl(URL.createObjectURL(file))
       setResult(null)
       setError(null)
-      setUploadedFileName(null)
     }
   }, [])
 
@@ -151,32 +46,6 @@ export default function DetectPage() {
     multiple: false,
   })
 
-  // Function to generate random analysis results
-  const generateRandomResult = (): AnalysisResult => {
-    const labels: ("pneumonia" | "normal" | "other")[] = ["pneumonia", "normal", "other"]
-    const randomLabel = labels[Math.floor(Math.random() * labels.length)]
-    
-    // Generate random confidence between 88% and 99%
-    const confidence = Math.random() * 0.11 + 0.88 // 0.88 to 0.99
-    
-    // Generate probabilities that sum to 1
-    const pneumoniaProb = randomLabel === "pneumonia" ? confidence : Math.random() * (1 - confidence) * 0.5
-    const normalProb = randomLabel === "normal" ? confidence : Math.random() * (1 - confidence) * 0.5
-    const otherProb = 1 - pneumoniaProb - normalProb
-    
-    return {
-      label: randomLabel,
-      probabilities: {
-        pneumonia: pneumoniaProb,
-        normal: normalProb,
-        other: otherProb
-      },
-      modelVersion: "PneumoNet-v2.1",
-      runtimeMs: Math.floor(Math.random() * 2000) + 500, // Random processing time between 500-2500ms
-      caseId: `case_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    }
-  }
-
   const handleAnalyze = async () => {
     if (!selectedFile) return
 
@@ -185,25 +54,29 @@ export default function DetectPage() {
     setResult(null)
 
     try {
-      // Simulate upload delay
-      await new Promise(resolve => setTimeout(resolve, 1500))
+      console.log("Processing image with Flask backend...")
       
-      console.log("Upload successful: Simulated")
+      // Call Flask API to process the image
+      const predictionResult = await apiService.processImage(selectedFile, modelVersion)
       
-      // Set the uploaded filename for result tracking
-      setUploadedFileName(selectedFile.name)
+      console.log("Processing successful:", predictionResult)
       
-      // Generate and set random result
-      const randomResult = generateRandomResult()
-      setResult(randomResult)
+      // Convert Flask response to our AnalysisResult format
+      const analysisResult: AnalysisResult = {
+        text: predictionResult.text,
+        modelVersion: `Model ${modelVersion}`,
+        caseId: `case_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      }
+      
+      setResult(analysisResult)
       setIsAnalyzing(false)
       
     } catch (error) {
-      console.error("Upload error:", error)
-      let errorMessage = "Upload failed"
+      console.error("Processing error:", error)
+      let errorMessage = "Processing failed"
       
       if (error instanceof TypeError && error.message.includes("Failed to fetch")) {
-        errorMessage = "Cannot connect to upload service. Please check if the service is running and CORS is configured."
+        errorMessage = "Cannot connect to Flask backend. Please check if the service is running on port 5000 and CORS is configured."
       } else if (error instanceof Error) {
         errorMessage = error.message
       }
@@ -214,12 +87,10 @@ export default function DetectPage() {
   }
 
   const handleClear = () => {
-    cleanupListeners()
     setSelectedFile(null)
     setPreviewUrl(null)
     setResult(null)
     setError(null)
-    setUploadedFileName(null)
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl)
     }
@@ -231,7 +102,6 @@ export default function DetectPage() {
     setSelectedFile(new File([""], "sample.jpg", { type: "image/jpeg" }))
     setResult(null)
     setError(null)
-    setUploadedFileName(null)
   }
 
   return (
@@ -282,6 +152,29 @@ export default function DetectPage() {
                         <X className="w-4 h-4" />
                       </Button>
                     </div>
+                    {/* Model Version Selector */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Model Version</label>
+                      <div className="flex gap-2">
+                        <Button
+                          variant={modelVersion === "1" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setModelVersion("1")}
+                          className="flex-1"
+                        >
+                          Model 1
+                        </Button>
+                        <Button
+                          variant={modelVersion === "2" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setModelVersion("2")}
+                          className="flex-1"
+                        >
+                          Model 2
+                        </Button>
+                      </div>
+                    </div>
+                    
                     <div className="flex gap-2">
                       <Button onClick={handleAnalyze} disabled={isAnalyzing} className="flex-1">
                         {isAnalyzing ? "Analyzing..." : "Analyze X-ray"}
@@ -294,10 +187,35 @@ export default function DetectPage() {
                 )}
 
                 {!previewUrl && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleUseSample} className="flex-1 bg-transparent">
-                      Use Sample Image
-                    </Button>
+                  <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={handleUseSample} className="flex-1 bg-transparent">
+                        Use Sample Image
+                      </Button>
+                    </div>
+                    
+                    {/* Model Version Selector */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Model Version</label>
+                      <div className="flex gap-2">
+                        <Button
+                          variant={modelVersion === "1" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setModelVersion("1")}
+                          className="flex-1"
+                        >
+                          Model 1
+                        </Button>
+                        <Button
+                          variant={modelVersion === "2" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setModelVersion("2")}
+                          className="flex-1"
+                        >
+                          Model 2
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -343,91 +261,14 @@ export default function DetectPage() {
                   <div className="space-y-6">
                     {/* Summary */}
                     <div className="text-center p-6 bg-primary/5 rounded-lg border">
-                      <h3 className="font-serif text-2xl font-bold mb-2">
-                        {result.label === "pneumonia"
-                          ? "Pneumonia Likely"
-                          : result.label === "normal"
-                            ? "Normal"
-                            : "Other Condition"}
+                      <h3 className="font-serif text-2xl font-bold mb-4">
+                        Analysis Result
                       </h3>
-                      <div className="text-4xl font-bold text-primary mb-2">
-                        {Math.round(result.probabilities[result.label] * 100)}%
-                      </div>
-                      <p className="text-sm text-muted-foreground">Confidence</p>
-                    </div>
-
-                    {/* Probabilities */}
-                    <div className="space-y-3">
-                      <h4 className="font-semibold">Class Probabilities</h4>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm">Pneumonia</span>
-                          <span className="text-sm font-medium">
-                            {Math.round(result.probabilities.pneumonia * 100)}%
-                          </span>
-                        </div>
-                        <Progress value={result.probabilities.pneumonia * 100} className="h-2" />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm">Normal</span>
-                          <span className="text-sm font-medium">{Math.round(result.probabilities.normal * 100)}%</span>
-                        </div>
-                        <Progress value={result.probabilities.normal * 100} className="h-2" />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm">Other</span>
-                          <span className="text-sm font-medium">{Math.round(result.probabilities.other * 100)}%</span>
-                        </div>
-                        <Progress value={result.probabilities.other * 100} className="h-2" />
+                      <div className="text-lg text-foreground mb-2">
+                        {result.text}
                       </div>
                     </div>
 
-                    {/* Annotated Image */}
-                    {result.overlays?.heatmapUrl && (
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-semibold">Annotated Image</h4>
-                          <div className="flex items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={() => setShowOverlay(!showOverlay)}>
-                              {showOverlay ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              {showOverlay ? "Hide" : "Show"} Overlay
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className="relative">
-                          <Image
-                            src={result.overlays.heatmapUrl || "/placeholder.svg"}
-                            alt="Annotated X-ray"
-                            width={400}
-                            height={400}
-                            className="w-full h-64 object-cover rounded-lg border"
-                            style={{
-                              opacity: showOverlay ? overlayOpacity[0] / 100 : 1,
-                            }}
-                          />
-                        </div>
-
-                        {showOverlay && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                              <span>Overlay Opacity</span>
-                              <span>{overlayOpacity[0]}%</span>
-                            </div>
-                            <Slider
-                              value={overlayOpacity}
-                              onValueChange={setOverlayOpacity}
-                              max={100}
-                              min={10}
-                              step={10}
-                              className="w-full"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
 
                     {/* Details */}
                     <div className="space-y-2 text-sm">
@@ -435,8 +276,6 @@ export default function DetectPage() {
                       <div className="grid grid-cols-2 gap-2 text-muted-foreground">
                         <div>Model Version:</div>
                         <div>{result.modelVersion}</div>
-                        <div>Processing Time:</div>
-                        <div>{result.runtimeMs}ms</div>
                         <div>Case ID:</div>
                         <div className="font-mono text-xs">{result.caseId}</div>
                       </div>

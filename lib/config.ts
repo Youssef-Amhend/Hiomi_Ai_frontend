@@ -1,26 +1,13 @@
 // API Configuration for Hiomi AI Frontend
 export const config = {
-  // Upload service (Spring Boot)
-  uploadService: {
-    baseUrl: process.env.NEXT_PUBLIC_UPLOAD_SERVICE_URL || "http://localhost:8080",
-    uploadEndpoint: "/upload",
+  // Flask backend service
+  apiService: {
+    baseUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000",
+    processEndpoint: "/process_image",
   },
   
-  // ML Result service
-  mlResultService: {
-    baseUrl: process.env.NEXT_PUBLIC_ML_RESULT_SERVICE_URL || "http://localhost:8085",
-    streamEndpoint: "/stream",
-    resultsEndpoint: "/results",
-  },
-  
-  // Default user ID (you can make this dynamic based on authentication)
-  defaultUserId: "1",
-  
-  // Polling configuration
-  polling: {
-    interval: 2000, // 2 seconds
-    maxAttempts: 30, // 1 minute max
-  },
+  // Default model version (1 or 2)
+  defaultModelVersion: "1",
   
   // File upload configuration
   upload: {
@@ -33,7 +20,4 @@ export const config = {
 } as const
 
 // Helper functions
-export const getUploadUrl = () => `${config.uploadService.baseUrl}${config.uploadService.uploadEndpoint}`
-export const getStreamUrl = () => `${config.mlResultService.baseUrl}${config.mlResultService.streamEndpoint}`
-export const getResultsUrl = (userId: string, filename: string) => 
-  `${config.mlResultService.baseUrl}${config.mlResultService.resultsEndpoint}?userId=${encodeURIComponent(userId)}&filename=${encodeURIComponent(filename)}`
+export const getProcessUrl = () => `${config.apiService.baseUrl}${config.apiService.processEndpoint}`
