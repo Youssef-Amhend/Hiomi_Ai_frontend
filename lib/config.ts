@@ -2,7 +2,7 @@
 export const config = {
   // Flask backend service
   apiService: {
-    baseUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000",
+    baseUrl: process.env.NEXT_PUBLIC_API_URL || "http://backendpneu-env.eba-9mp795ix.eu-north-1.elasticbeanstalk.com",
     processEndpoint: "/process_image",
   },
   
