@@ -1,6 +1,6 @@
 // API service for connecting to Flask backend
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://backendpneu-env.eba-9mp795ix.eu-north-1.elasticbeanstalk.com';
+const API_BASE_URL = '';
 
 export interface PredictionResult {
   text: string;
@@ -48,7 +48,7 @@ class ApiService {
       formData.append('image', file);
       formData.append('model', modelVersion);
 
-      const response = await fetch(`${this.baseUrl}/process_image`, {
+      const response = await fetch(`/api/process_image`, {
         method: 'POST',
         body: formData,
       });
@@ -104,7 +104,7 @@ class ApiService {
   // Test CORS preflight
   async testCORS(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/process_image`, {
+      const response = await fetch(`/api/process_image`, {
         method: "OPTIONS",
         headers: {
           "Origin": "http://localhost:3000",
